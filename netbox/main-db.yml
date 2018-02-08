@@ -1,0 +1,134 @@
+---
+- name: Install PostgreSQL v9.6 on DB-Servers
+  hosts: all
+
+  tasks:
+# ============= YUM Installs ============
+
+  - name: Add PGDG Repo
+    yum:
+       name: https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
+       state: present
+    become: true
+
+  - name: Install PostreSQL 9.6
+    yum:
+       name: postgresql96
+       state: present
+    become: true
+
+  - name: Install PostreSQL 9.6 Server
+    yum:
+       name: postgresql96-server
+       state: present
+    become: true
+
+  - name: Install PostreSQL 9.6 Development Tools
+    yum:
+       name: postgresql96-devel
+       state: present
+    become: true
+
+  - name: Install PostreSQL 9.6 Contrib Tools
+    yum:
+       name: postgresql96-contrib
+       state: present
+    become: true
+
+  - name: Install Python PsycoPG2 Library
+    yum:
+       name: python-psycopg2
+       state: present
+    become: true
+
+# ============= POST-Install DB Tasks ============
+
+  - name: Initialize DB
+    command: '/usr/pgsql-9.6/bin/postgresql96-setup initdb'
+    args:
+      creates: /var/lib/pgsql/9.6/data/base/1/PG_VERSION
+    become: true
+
+  - replace:
+      path: /var/lib/pgsql/9.6/data/pg_hba.conf
+      regexp: 'host(\s+)all(\s+)all(\s+)127.0.0.1.32(\s+)ident'
+      replace: '\1host  all     all     0.0.0.0/0       md5\1'
+      backup: yes
+    become: true
+
+  - replace:
+      path: /var/lib/pgsql/9.6/data/postgresql.conf
+      regexp: '#listen_addresses.*'
+      replace: "listen_addresses = '*'"
+      backup: yes
+    become: true
+
+  - name: Enable PostgreSQL Server start on boot
+    command: 'systemctl enable postgresql-9.6'
+    become: true
+
+  - name: Start PostgreSQL Server Service
+    command: 'systemctl start postgresql-9.6'
+    become: true
+
+# ============= Create DB Objects ============
+
+  - postgresql_db:
+      name: netbox
+      state: present
+    become: true
+    become_user: postgres
+
+  - postgresql_user:
+      db: netbox
+      name: netbox
+      password: "{{ db_pgsql_pass }}"
+      priv: "ALL"
+      state: present
+    become: true
+    become_user: postgres
+
+# ============ Test DB Objects ===================
+
+  - name: Check DB Connection
+    shell: |
+      psql -U netbox -h localhost -W
+
+      expect "Password"
+      send {{ db_pgsql_pass }}"\n"
+
+      expect "netbox=>"
+      send "\q\n"
+      exit 0
+    args:
+      executable: /usr/bin/expect
+    become: true
+
+# ==== Disable FWs and SELinux then Reboot  ======
+
+  - name: Enable PostgreSQL Server start on boot
+    command: 'systemctl disable firewalld'
+    become: true
+
+  - selinux:
+      policy: targeted
+      state: disabled
+    become: true
+
+  - name: Restart DB Servers
+    shell: sleep 5 && shutdown -r now "Reboot triggered by Ansible"
+    async: 1
+    poll: 0
+    become: true
+    become_method: sudo
+    ignore_errors: true
+
+  - name: Wait for DB Server to restart...
+    local_action:
+      module: wait_for
+        host={{ inventory_hostname }}
+        port=22
+        delay=1
+        timeout=300
+        connect_timeout=15
+
